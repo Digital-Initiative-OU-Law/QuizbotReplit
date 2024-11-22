@@ -9,22 +9,30 @@ from .ollama_service import OllamaService
 
 class OpenAIService:
     def __init__(self):
+        self.initialize_service()
+        
+        self.max_retries = 5
+        self.timeout = 20
+        self.cache_ttl = 3600
+        self.encoder = tiktoken.encoding_for_model("gpt-4")
+        self.max_history_tokens = 2000
+
+    def initialize_service(self):
+        """Initialize or reinitialize the service based on current settings"""
         # Check if we should use Ollama
         self.use_ollama = os.getenv('USE_OLLAMA', 'false').lower() == 'true'
         if self.use_ollama:
             self.ollama = OllamaService()
+            if hasattr(self, 'client'):
+                del self.client
         else:
             # Priority order for API key:
             # 1. User's custom key from session
             # 2. Environment variable from .env
             # 3. System default (if available)
             self.client = OpenAI(api_key=self._get_api_key())
-            
-        self.max_retries = 5
-        self.timeout = 20
-        self.cache_ttl = 3600
-        self.encoder = tiktoken.encoding_for_model("gpt-4")
-        self.max_history_tokens = 2000
+            if hasattr(self, 'ollama'):
+                del self.ollama
 
     def _get_api_key(self):
         if self.use_ollama:
@@ -40,7 +48,8 @@ class OpenAIService:
             return env_key
             
         # No key available
-        st.error("No OpenAI API key found. Please add your API key in Settings.")
+        if not self.use_ollama:  # Only show error if we're trying to use OpenAI
+            st.error("No OpenAI API key found. Please add your API key in Settings.")
         return None
 
     def verify_api_key(self, api_key: str) -> bool:
@@ -68,6 +77,9 @@ class OpenAIService:
 
     def generate_response(self, prompt: str, context: str) -> str:
         """Generate a response for the quiz dialogue"""
+        # Reinitialize service in case settings changed
+        self.initialize_service()
+        
         if self.use_ollama:
             return self.ollama.generate_response(prompt, context)
             
@@ -89,6 +101,9 @@ class OpenAIService:
 
     def generate_title_summary(self, text: str) -> str:
         """Generate a title summary for the conversation"""
+        # Reinitialize service in case settings changed
+        self.initialize_service()
+        
         if self.use_ollama:
             return self.ollama.generate_title_summary(text)
             
@@ -108,6 +123,9 @@ class OpenAIService:
 
     def generate_summary(self, text: str) -> str:
         """Generate a summary of the text content"""
+        # Reinitialize service in case settings changed
+        self.initialize_service()
+        
         if self.use_ollama:
             return self.ollama.generate_summary(text)
             

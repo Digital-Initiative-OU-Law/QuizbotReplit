@@ -4,12 +4,16 @@ st.set_page_config(page_title="QuizBot", layout="wide")
 
 import os
 from datetime import datetime
+from dotenv import load_dotenv
 from database.models import init_db, get_db_connection
 from database.operations import DatabaseOperations
 from database.analytics import AnalyticsOperations
 from services.openai_service import OpenAIService
 from services.pdf_service import PDFService
 from utils.auth import Auth
+
+# Load environment variables
+load_dotenv()
 
 # Initialize services
 openai_service = OpenAIService()
@@ -138,9 +142,18 @@ def main():
         
         with tab2:
             with st.form("register_form"):
-                st.info("An OpenAI API key is required to use QuizBot. You can get one at https://platform.openai.com/api-keys")
-                api_key = st.text_input("OpenAI API Key", type="password",
-                                    help="Your personal OpenAI API key for using the QuizBot")
+                llm_choice = st.selectbox(
+                    "Choose Language Model",
+                    ["OpenAI", "Ollama"],
+                    help="Select which language model to use. OpenAI requires an API key, Ollama runs locally."
+                )
+                
+                api_key = st.text_input(
+                    "OpenAI API Key",
+                    type="password",
+                    help="Your personal OpenAI API key (required if using OpenAI)",
+                    disabled=llm_choice == "Ollama"
+                )
                 new_username = st.text_input("Choose Username")
                 new_password = st.text_input("Choose Password", type="password")
                 first_name = st.text_input("First Name")
@@ -149,15 +162,21 @@ def main():
                 submit = st.form_submit_button("Register")
                 
                 if submit:
-                    if not api_key:
-                        st.error("OpenAI API key is required.")
+                    if llm_choice == "OpenAI" and not api_key:
+                        st.error("OpenAI API key is required when using OpenAI.")
                         return
                         
-                    if not openai_service.verify_api_key(api_key):
+                    if llm_choice == "OpenAI" and not openai_service.verify_api_key(api_key):
                         st.error("Invalid OpenAI API key. Please check and try again.")
                         return
-                        
-                    if Auth.register_user(new_username, new_password, first_name, last_name, api_key):
+                    
+                    # Only store API key if using OpenAI
+                    store_key = api_key if llm_choice == "OpenAI" else None
+                    
+                    if Auth.register_user(new_username, new_password, first_name, last_name, store_key):
+                        # Set the USE_OLLAMA environment variable based on choice
+                        if llm_choice == "Ollama":
+                            os.environ['USE_OLLAMA'] = 'true'
                         st.success("Registration successful! Please login.")
                     else:
                         st.error("Registration failed. Username might be taken.")
@@ -166,34 +185,51 @@ def main():
     # Add API key management in sidebar
     with st.sidebar:
         with st.expander("Settings", expanded=False):
-            st.info("Your OpenAI API key is required to use QuizBot")
-            current_key = "•" * 8 if st.session_state.custom_openai_key else "No key set (using system default)"
-            st.text(f"Current API Key: {current_key}")
-            
-            new_api_key = st.text_input(
-                "Update OpenAI API Key",
-                type="password",
-                help="Enter your OpenAI API key to use your own account."
+            # LLM Choice
+            current_llm = "Ollama" if os.getenv('USE_OLLAMA', 'false').lower() == 'true' else "OpenAI"
+            new_llm = st.selectbox(
+                "Language Model",
+                ["OpenAI", "Ollama"],
+                index=0 if current_llm == "OpenAI" else 1,
+                help="Select which language model to use"
             )
-            if st.button("Update API Key"):
-                if new_api_key:
-                    if openai_service.verify_api_key(new_api_key):
-                        if Auth.update_api_key(st.session_state.user_id, new_api_key):
-                            st.session_state.custom_openai_key = new_api_key
-                            st.success("API key updated successfully!")
+            
+            # Only show API key settings if using OpenAI
+            if new_llm == "OpenAI":
+                st.info("Your OpenAI API key is required to use OpenAI's models")
+                current_key = "•" * 8 if st.session_state.custom_openai_key else "No key set (using system default)"
+                st.text(f"Current API Key: {current_key}")
+                
+                new_api_key = st.text_input(
+                    "Update OpenAI API Key",
+                    type="password",
+                    help="Enter your OpenAI API key to use your own account."
+                )
+                if st.button("Update Settings"):
+                    if new_api_key:
+                        if openai_service.verify_api_key(new_api_key):
+                            if Auth.update_api_key(st.session_state.user_id, new_api_key):
+                                st.session_state.custom_openai_key = new_api_key
+                                os.environ['USE_OLLAMA'] = 'false'
+                                st.success("Settings updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update settings.")
+                        else:
+                            st.error("Invalid API key. Please check and try again.")
+                    else:
+                        # Remove custom API key
+                        if Auth.update_api_key(st.session_state.user_id, None):
+                            st.session_state.custom_openai_key = None
+                            st.success("Switched to system default API key.")
                             st.rerun()
                         else:
-                            st.error("Failed to update API key.")
-                    else:
-                        st.error("Invalid API key. Please check and try again.")
-                else:
-                    # Remove custom API key
-                    if Auth.update_api_key(st.session_state.user_id, None):
-                        st.session_state.custom_openai_key = None
-                        st.success("Switched to system default API key.")
-                        st.rerun()
-                    else:
-                        st.error("Failed to update API key.")
+                            st.error("Failed to update settings.")
+            else:  # Ollama selected
+                if st.button("Update Settings"):
+                    os.environ['USE_OLLAMA'] = 'true'
+                    st.success("Switched to Ollama!")
+                    st.rerun()
 
     # Main content area
     if st.session_state.quiz_started and not st.session_state.show_conversations:

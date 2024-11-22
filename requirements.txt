@@ -9,6 +9,7 @@ plotly>=5.24.1
 psycopg2-binary>=2.9.10
 pymupdf>=1.24.13
 pypdf2>=3.0.1
+python-dotenv>=1.0.0
 streamlit>=1.39.0
 tenacity>=9.0.0
 tiktoken>=0.8.0
