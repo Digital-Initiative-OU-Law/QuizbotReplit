@@ -84,6 +84,37 @@ class OllamaService:
             print(f"Error generating title: {str(e)}")
             return None
             
+    def generate_summary(self, text: str) -> str:
+        """Generate a summary using Ollama"""
+        try:
+            response = requests.post(
+                f"{self.host}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": "Create a concise summary of key concepts from the provided text. Focus on main ideas and theories that could be used for Socratic questioning."},
+                        {"role": "user", "content": text}
+                    ],
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.3,
+                        "num_predict": 1000,
+                    }
+                },
+                timeout=self.timeout
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['message']['content'].strip()
+            else:
+                st.error(f"Error from Ollama API: {response.text}")
+                return None
+            
+        except Exception as e:
+            st.error(f"Error generating summary: {str(e)}")
+            return None
+            
     @lru_cache(maxsize=100)
     def count_tokens(self, text: str) -> int:
         """Estimate token count - using tiktoken for consistency"""

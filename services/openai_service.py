@@ -138,16 +138,16 @@ class OpenAIService:
         
         if self.use_ollama:
             return self.ollama.generate_summary(text)
-            
+        
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "Create a concise summary (2-3 sentences) of the main topics and themes in this text."},
+                    {"role": "system", "content": "Create a concise summary of key concepts from the provided text. Focus on main ideas and theories that could be used for Socratic questioning."},
                     {"role": "user", "content": text}
                 ],
-                max_tokens=200,
-                temperature=0.7
+                max_tokens=1000,
+                temperature=0.3
             )
             return response.choices[0].message.content.strip()
         except Exception as e:

@@ -8,16 +8,18 @@ import hashlib
 from functools import lru_cache
 from typing import Dict, List, Tuple
 import gc
+from services.openai_service import OpenAIService
 
 class PDFService:
     def __init__(self):
         self.readings_folder = 'Readings'
         self.supported_formats = ['.pdf']
-        self.chunk_size = 300  # Reduced from 500
-        self.extraction_threads = 2  # Reduced from 4
+        self.extraction_threads = 2
         self.file_cache = {}
+        self.summary_cache = {}
         self._cache_lock = threading.Lock()
-        
+        self.openai_service = OpenAIService()
+
     def _calculate_file_hash(self, file_path: str) -> str:
         """Calculate MD5 hash of a file with memory efficient chunking"""
         hash_md5 = hashlib.md5()
@@ -26,20 +28,8 @@ class PDFService:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
-    @lru_cache(maxsize=20)
-    def clean_text(self, text: str) -> str:
-        """Clean and preprocess extracted text with caching"""
-        if not text:
-            return ""
-        text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-        return text
-
     def _process_page(self, page) -> str:
         try:
-            # Simplified text extraction
             text = page.extract_text(
                 layout=True,
                 x_tolerance=3,
@@ -50,12 +40,11 @@ class PDFService:
             print(f"Error processing page: {str(e)}")
             return ""
 
-    def _process_pdf_parallel(self, pdf_path: str) -> Tuple[str, List, List, Dict]:
+    def _process_pdf_parallel(self, pdf_path: str) -> str:
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 total_pages = len(pdf.pages)
                 
-                # Process pages in smaller batches
                 text_chunks = []
                 batch_size = 5
                 progress_bar = st.progress(0)
@@ -80,104 +69,84 @@ class PDFService:
                             except Exception as e:
                                 st.error(f"Error processing page {page_num + 1}: {str(e)}")
                     
-                    # Update progress
                     progress = min((batch_end) / total_pages, 1.0)
                     progress_bar.progress(progress)
                     status_text.write(f"Processing pages {batch_start + 1}-{batch_end}/{total_pages}")
-                    
-                    # Force garbage collection after each batch
                     gc.collect()
                 
                 progress_bar.empty()
                 status_text.empty()
                 
-                return '\n\n'.join(text_chunks), [], [], {}
+                return '\n\n'.join(text_chunks)
                 
         except Exception as e:
             st.error(f"Error processing PDF: {str(e)}")
-            return "", [], [], {}
+            return ""
 
-    def extract_text_with_formatting(self, folder_path: str) -> Tuple[str, List, List, Dict]:
+    def _generate_summary(self, text: str, filename: str) -> str:
+        """Generate a summary of concepts from the text"""
+        prompt = f"""Create a concise summary of the key concepts from this document. 
+        Focus on the main ideas, theories, and important points that could be used for 
+        Socratic questioning. Format the output as a list of concepts, each with a brief explanation.
+        Document: {filename}
+        Text: {text}"""
+        
+        return self.openai_service.generate_summary(prompt)
+
+    def extract_summaries(self, folder_path: str) -> Dict[str, str]:
+        """Extract and summarize text from all PDFs in the folder"""
         try:
             if not os.path.exists(folder_path):
                 st.error(f"Readings folder not found: {folder_path}")
-                return "", [], [], {}
+                return {}
                 
             pdf_files = [f for f in os.listdir(folder_path) if f.endswith('.pdf')]
             if not pdf_files:
                 st.error("No PDF files found in Readings folder")
-                return "", [], [], {}
+                return {}
             
-            all_text = []
+            summaries = {}
             for filename in pdf_files:
                 file_path = os.path.join(folder_path, filename)
                 try:
-                    # Skip empty files
                     if os.path.getsize(file_path) == 0:
                         st.warning(f"Skipping empty file: {filename}")
                         continue
-                        
-                    # Check cache
+                    
+                    # Check cache for summary
                     file_hash = self._calculate_file_hash(file_path)
-                    cache_key = f"{file_hash}_{os.path.getsize(file_path)}"
+                    cache_key = f"summary_{file_hash}"
                     
                     with self._cache_lock:
-                        if cache_key in self.file_cache:
-                            text = self.file_cache[cache_key]
-                            st.info(f"Retrieved {filename} from cache")
+                        if cache_key in self.summary_cache:
+                            summaries[filename] = self.summary_cache[cache_key]
+                            st.info(f"Retrieved summary for {filename} from cache")
+                            continue
+                    
+                    # Process PDF and generate summary
+                    text = self._process_pdf_parallel(file_path)
+                    if text.strip():
+                        summary = self._generate_summary(text, filename)
+                        if summary:
+                            summaries[filename] = summary
+                            with self._cache_lock:
+                                self.summary_cache[cache_key] = summary
                         else:
-                            text, _, _, _ = self._process_pdf_parallel(file_path)
-                            if text.strip():
-                                self.file_cache[cache_key] = text
-                            else:
-                                st.warning(f"No text content found in {filename}")
-                                continue
-                    
-                    all_text.append(f"\n=== Document: {filename} ===\n")
-                    all_text.append(text)
-                    
-                    # Periodic cache cleanup
-                    if len(self.file_cache) > 10:
-                        with self._cache_lock:
-                            oldest_keys = sorted(self.file_cache.keys())[:-10]
-                            for key in oldest_keys:
-                                del self.file_cache[key]
-                        gc.collect()
+                            st.warning(f"Failed to generate summary for {filename}")
+                    else:
+                        st.warning(f"No text content found in {filename}")
                         
                 except Exception as e:
                     st.error(f"Error processing {filename}: {str(e)}")
                     continue
             
-            if not all_text:
-                st.error("No text could be extracted from any PDF files")
-                return "", [], [], {}
+            # Combine summaries with document separators
+            if not summaries:
+                st.error("No summaries could be generated from PDF files")
+                return {}
                 
-            return '\n'.join(all_text), [], [], {}
+            return summaries
             
         except Exception as e:
             st.error(f"Error accessing folder {folder_path}: {str(e)}")
-            return "", [], [], {}
-
-    def chunk_text(self, text: str, chunk_size: int = None) -> List[str]:
-        if not text:
-            return []
-            
-        chunk_size = chunk_size or self.chunk_size
-        chunks = []
-        current_chunk = []
-        current_size = 0
-        
-        # Simple paragraph-based chunking
-        for paragraph in text.split('\n\n'):
-            if current_size + len(paragraph) > chunk_size:
-                if current_chunk:
-                    chunks.append('\n\n'.join(current_chunk))
-                    current_chunk = []
-                    current_size = 0
-            current_chunk.append(paragraph)
-            current_size += len(paragraph)
-            
-        if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
-        
-        return chunks
+            return {}

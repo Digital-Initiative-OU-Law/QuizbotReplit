@@ -52,22 +52,44 @@ def start_new_quiz():
 
     try:
         with st.spinner("Processing PDF documents..."):
-            text, tables, images, footnotes = pdf_service.extract_text_with_formatting('Readings')
-            if not text:
-                st.error("No PDFs found in the Readings folder.")
+            # Get summaries instead of raw text
+            summaries = pdf_service.extract_summaries('Readings')
+            if not summaries:
+                st.error("No summaries could be generated from PDFs in the Readings folder.")
                 return False
             
+            # Combine summaries with separators
+            combined_summaries = "\n\n".join([f"=== {filename} ===\n{summary}" 
+                                            for filename, summary in summaries.items()])
+            
             # Create conversation with meaningful title
-            title = openai_service.generate_title_summary(text[:2000]) or f"Quiz {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            title = openai_service.generate_title_summary(combined_summaries) or f"Quiz {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            
+            # Create conversation and store summaries as context
             st.session_state.conversation_id = db_ops.create_conversation(
                 st.session_state.user_id,
                 title=title,
-                context=text
+                context=combined_summaries
             )
             
-            # Generate first question
-            initial_prompt = "Based on the provided materials, generate an engaging Socratic question to start our discussion."
-            response = openai_service.generate_response(initial_prompt, text)
+            # Select a random concept from the summaries for the initial question
+            all_concepts = []
+            for summary in summaries.values():
+                # Split summary into concepts (assuming they're separated by newlines)
+                concepts = [c.strip() for c in summary.split('\n') if c.strip()]
+                all_concepts.extend(concepts)
+            
+            if not all_concepts:
+                st.error("No concepts found in the summaries.")
+                return False
+            
+            # Choose a random concept
+            import random
+            initial_concept = random.choice(all_concepts)
+            
+            # Generate first question based on the chosen concept
+            initial_prompt = f"Based on this concept: {initial_concept}, generate an engaging Socratic question to start our discussion."
+            response = openai_service.generate_response(initial_prompt, combined_summaries)
             
             if response:
                 # Save the assistant's first question
