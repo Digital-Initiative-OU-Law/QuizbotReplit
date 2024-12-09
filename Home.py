@@ -248,27 +248,48 @@ def main():
             with st.chat_message(role):
                 st.write(content)
         
-        # Chat input
-        if prompt := st.chat_input("Type your response..."):
-            with st.spinner("Processing your response..."):
-                # Save user message
-                message_id = db_ops.save_message(st.session_state.conversation_id, "user", prompt)
-                st.session_state.messages.append(("user", prompt))
-                
-                # Get conversation context
-                context = db_ops.get_conversation_context(st.session_state.conversation_id)
-                
-                # Generate and save assistant response
-                response = openai_service.generate_response(prompt, context)
-                if response:
-                    db_ops.save_message(st.session_state.conversation_id, "assistant", response)
-                    st.session_state.messages.append(("assistant", response))
-                
-                # Update analytics
-                AnalyticsOperations.update_message_analytics(message_id)
-                AnalyticsOperations.update_conversation_analytics(st.session_state.conversation_id)
-                AnalyticsOperations.update_user_analytics(st.session_state.user_id)
-                
+        # Chat input and End Quiz button in columns
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            if prompt := st.chat_input("Type your response..."):
+                with st.spinner("Processing your response..."):
+                    # Save user message
+                    message_id = db_ops.save_message(st.session_state.conversation_id, "user", prompt)
+                    st.session_state.messages.append(("user", prompt))
+                    
+                    # Get conversation context
+                    context = db_ops.get_conversation_context(st.session_state.conversation_id)
+                    
+                    # Generate and save assistant response
+                    response = openai_service.generate_response(prompt, context)
+                    if response:
+                        db_ops.save_message(st.session_state.conversation_id, "assistant", response)
+                        st.session_state.messages.append(("assistant", response))
+                    
+                    # Update analytics
+                    AnalyticsOperations.update_message_analytics(message_id)
+                    AnalyticsOperations.update_conversation_analytics(st.session_state.conversation_id)
+                    AnalyticsOperations.update_user_analytics(st.session_state.user_id)
+                    
+                    st.rerun()
+        with col2:
+            if st.button("End Quiz", type="primary"):
+                # Get conversation messages
+                messages = db_ops.get_conversation_messages(st.session_state.conversation_id)
+                # Format transcript
+                transcript = db_ops.format_transcript(messages)
+                # End the conversation in database
+                db_ops.end_conversation(st.session_state.conversation_id)
+                # Offer transcript download
+                st.download_button(
+                    "Download Transcript",
+                    transcript,
+                    file_name=f"quiz_transcript_{st.session_state.conversation_id}.txt",
+                    mime="text/plain"
+                )
+                # Reset session state
+                st.session_state.quiz_started = False
+                st.session_state.show_conversations = True
                 st.rerun()
     else:
         # Main interface

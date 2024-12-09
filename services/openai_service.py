@@ -84,13 +84,23 @@ class OpenAIService:
             return self.ollama.generate_response(prompt, context)
             
         try:
+            # Get the last few messages to maintain conversation context
+            messages = [
+                {"role": "system", "content": "You are a Socratic professor engaging in a dialogue with a student. Ask probing questions that encourage critical thinking and deeper analysis. Never explain your reasoning or teaching methodology. Do not provide explanations, commentary, or direct answers. Simply ask thoughtful questions that guide the student to discover insights on their own. Keep questions focused on the current topic and build upon the student's previous responses."},
+                {"role": "assistant", "content": f"Context: {context[:2000]}..."}
+            ]
+            
+            # Add conversation history if available
+            if hasattr(st.session_state, 'messages') and st.session_state.messages:
+                for role, content in st.session_state.messages[-3:]:  # Include last 3 messages
+                    messages.append({"role": role, "content": content})
+            
+            # Add the current prompt
+            messages.append({"role": "user", "content": prompt})
+            
             response = self.client.chat.completions.create(
                 model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are a Socratic tutor helping a student understand complex concepts. Ask thought-provoking questions and provide guidance without giving direct answers."},
-                    {"role": "assistant", "content": f"Context: {context[:2000]}..."},
-                    {"role": "user", "content": prompt}
-                ],
+                messages=messages,
                 max_tokens=500,
                 temperature=0.7
             )
